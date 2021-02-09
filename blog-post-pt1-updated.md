@@ -2,7 +2,7 @@
 
 Part 1: Phoenix Setup and User Registration
 
-June 14, 2020.
+December 19, 2020.
 
 **Fair warning**:  *I am a hack. I am an civil engineer that has a hobby doing web development. Follow me at your own risk!* That said, others may find it worthwhile to read my experiences in developing a web app.
 
@@ -10,7 +10,7 @@ Big Thanks to [**Embercasts**]() excellent course on using [Ember with a Phoenix
 
 That said, I have made some changes to packages used, obviously updated to the current versions of both Ember and Phoenix, and implemented a few thing is different ways -- but full credit to previous works.
 
-For this application, I will be using [Elixir Phoenix](https://www.phoenixframework.org/) (v1.5.3) as the backend that will serve up [JSON:API](https://jsonapi.org/) complient json to be used by an frontend developed in [Ember.js](https://emberjs.com/) ---  specifically *[Ember Octane](https://blog.emberjs.com/2019/12/20/octane-is-here.html)* --- this app will use Ember(v3.19).
+For this application, I will be using [Elixir Phoenix](https://www.phoenixframework.org/) (v1.5.5) as the backend that will serve up [JSON:API](https://jsonapi.org/) complient json to be used by an frontend developed in [Ember.js](https://emberjs.com/) ---  specifically *[Ember Octane](https://blog.emberjs.com/2019/12/20/octane-is-here.html)* --- this app will use Ember(v3.23).
 
 This write up assumes you have all the necessary precursors installed as I will not be going over any of that. Suffice to say that you have to have elixir, mix, phoenix etc installed, posgresql (and postgis -- *just because* -- ) as well as npm, yarn, ember-cli etc, etc. I will try to point out where I found that additional programs or dependencies needed to be updated or installed, but realize YMMV.
 
@@ -42,9 +42,11 @@ defp deps do
   {:ja_serializer, github: "vt-elixir/ja_serializer", branch: "master"},
   {:cors_plug, "~> 2.0.2"},
   {:geo_postgis, "~> 3.3.1"},
+  {:ueberauth, "~> 0.6.3"},
+  {:ueberauth_identity, "0.3.1"},
+  {:guardian, "2.1.1"},    
   {:comeonin, "~> 5.3.1"},
-  {:bcrypt_elixir, "~> 2.2.0"},
-  {:joken, "~> 2.2.0"}
+  {:bcrypt_elixir, "~> 2.2.0"}
 ]
 end
 
@@ -55,9 +57,11 @@ We added ja_serializer to handle the serialization into JSON:API compliant JSON.
 
 [geo_postgis](https://github.com/bryanjos/geo_postgis) because I do a lot of GIS in my day to day, have been using GIS since school in 1991, and I have aspirations about having a spatial component to this application one day. [Postgis](https://postgis.net/) is the fantastic spatial extentions to Postgresql. [geo](https://github.com/bryanjos/geo) and geo_postgis are elixir wrappers that allows you to declare spatial types (that map to posgis types) and call certain postgis functions from elixir. We won't be using them off hop -- ignore it if you want, but configuring the database and such will assume it is installed and configured.
 
-[comeonin](https://github.com/riverrun/comeonin) and [bcrypt_elixir](https://github.com/riverrun/bcrypt_elixir) will take care of password hashing and verification.
+I will use [Json Web Tokens](https://jwt.io/) (JWT) for authenication to the frontend client.  The server will be using the [ueberauth](https://github.com/ueberauth/ueberauth) for user authenication, and the [ueberauth_identity](https://github.com/ueberauth/ueberauth_identity) "strategy" -- which is basic user validation using <i>username</i> and <i>password</i>.
 
-I will use [Json Web Tokens](https://jwt.io/) (JWT) for authenication, and that is why we have included the [Joken](https://hexdocs.pm/joken/introduction.html) library.
+[Guardian](https://github.com/ueberauth/guardian) will provide the JWT token functionality -- encoding/decoding and signing/verifying.
+
+[comeonin](https://github.com/riverrun/comeonin) and [bcrypt_elixir](https://github.com/riverrun/bcrypt_elixir) will take care of password hashing and verification.
 
 Okay, let's actually add the packages to the application -- you know the drill.
 
@@ -94,12 +98,15 @@ We will use the Jason elixir library for JSON. Feel free to use Poison if you wa
 
 Same with geo_postgis which uses Poison by default.
 
+Configuration for the authorizaiton libraries will a couple of steps from now.
+
+
 Following the ja_serializer docs... clean and build the mime type.
 
 ```
 mix deps.clean mime --build
 ```
-.... and before I forget, let's accept json-api and add the necesarry plugs to our pipeline in the router. I also changed the entry point for our api to the plain root url (```"/"```)
+.... and before I forget, let's accept json-api and add the necesarry plugs to our pipeline in the router.
 
 ```elixir
 # ./lib/pucks_web/router.ex
@@ -112,7 +119,7 @@ mix deps.clean mime --build
 
   end
 
-  scope "/", PucksWeb do
+  scope "/api", PucksWeb do
     pipe_through :api
   end
 
@@ -243,7 +250,7 @@ We need users to authenticate so lets add that functionality.
 
 Okay, we will run a generator to create a *user*. I will put it in a **People** context.
 
-``` mix phx.gen.json People User users username:string email:string password:string password_confirmation:string password_hash:string```
+``` mix phx.gen.json Accounts User users username:string email:string password:string password_confirmation:string password_hash:string```
  
 We included a boat load of password fields in the command, but we will be editing our migration and schema to get them to where they have to be.
 
@@ -306,18 +313,27 @@ The *unsafe_validate_unique* validation included with **Ecto.Changeset**, as the
 
 The only thing left to do is to hash the password. This is where *bcrypt_elixir* comes in.
 
-We create a new private method that will hash_the_password, using the ```add_hash/2``` function provided by Bcrypt_elixir.
+We create a new private method that will hash_the_password, using the ```add_hash/2``` function provided by Bcrypt_elixir. We wrapped this in a case statement to test is the changeset is valid. 
+
+
 ```elixir
 # ./lib/pucks/people/user.ex
 #  ...
   defp hash_the_password(changeset) do
-    hash = Bcrypt.add_hash(get_field(changeset, :password))
+    case changeset do
+      %Ecto.Changeset{valid?: true, changes: %{password: password}} ->
+        hash = Bcrypt.add_hash(password)
 
-    put_change(changeset, :password_hash, hash.password_hash)       
+        put_change(changeset, :password_hash, hash.password_hash)
+      _ ->
+        changeset       
+    end
+  
   end
 #   ...
 ```
 And finally we add it as the final pipe to our changeset.
+
 ```elixir
 # ./lib/pucks/people/user.ex
 #  ...
@@ -327,13 +343,15 @@ And finally we add it as the final pipe to our changeset.
 #   ...
 ```
 At this stage, probably not a bad idea to fire up the phx server and test it out.
-```
+
+```zsh
 > iex -S mix phx.server
 ```
-```elixir
+```zsh
 iex(1)> alias Pucks.People.User
 Pucks.People.User
-iex(2)> attrs = %{ email: "bobby.clarke@flyers.com", username: "bobby", password: "number16", password_confirmation: "number16"} %{
+iex(2)> attrs = %{ email: "bobby.clarke@flyers.com", username: "bobby", password: "number16", password_confirmation: "number16"} 
+%{
   email: "bobby.clarke@flyers.com",
   password: "number16",
   password_confirmation: "number16",
@@ -359,9 +377,9 @@ SELECT TRUE FROM "users" AS u0 WHERE (u0."email" = $1) LIMIT 1 ["bobby.clarke@fl
   valid?: true
 >
 ```
-We now have a vaild changeset. We can insert the record into our database.
+We now have a vaild changeset. We can insert the record (stored in the variable <i>user</i>) into our database.
 
-```elixir
+```zsh
 iex(4)> Pucks.Repo.insert user
 
 [debug] QUERY OK db=1315.5ms queue=0.7ms idle=1598.3ms
@@ -381,7 +399,7 @@ INSERT INTO "users" ("email","password_hash","username","inserted_at","updated_a
 ```
 Notice that only the *:username*, *:email*, and *:password_hash* field were inserted into the database.  We can double check this by listing all Users.
 
-```elixir
+```zsh
 iex(4)> Pucks.People.list_users
 
 [debug] QUERY OK source="users" db=1.6ms queue=1.1ms idle=1450.6ms
@@ -402,7 +420,7 @@ SELECT u0."id", u0."email", u0."password_hash", u0."username", u0."inserted_at",
 ```
 Let test out our validations with some flawed data:
 
-```elixir
+```zsh
 iex(5)> attrs = %{ email: "bobby.clarke@flyers.com", password: "number8", password_confirmation: "number24448"}
 [debug] QUERY OK source="users" db=2.2ms idle=1901.8ms
 SELECT TRUE FROM "users" AS u0 WHERE (u0."email" = $1) LIMIT 1 ["bobby.clarke@flyers.com"]
@@ -428,7 +446,8 @@ iex(6)>
 ```
 As expected, it picked up the errors and reported all three, reporting the changeset was not valid (*valid?: flase*)
 Let's clean up the information and add it to the database (results not shown for brevity).
-```elixir
+
+```zsh
 iex(6)> attrs = %{ email: "dave.schultz@flyers.com", username: "the hammer", password: "number8", password_confirmation: "number8"}
 ....
 
@@ -468,7 +487,7 @@ Here is how the create method looks in the controller:
       {:error, %Ecto.Changeset{} = changeset} ->
         conn
         |> put_status(:unprocessable_entity)
-        |> put_view(PicmeWeb.ErrorView)
+        |> put_view(PucksWeb.ErrorView)
         |> render("400.json-api", data: changeset)
 
   end
@@ -491,7 +510,7 @@ defmodule PucksWeb.UserView do
 end
 ```
 The last thing we want prior to turning to Postman is to setup our *401.json* render method in our ErrorView module.
-Thanks again to JaSerializer, and specifically the EctoErrorSerializer.format, this render function is also super simple:
+Thanks again to JaSerializer, and specifically the *EctoErrorSerializer.format* method, this render function is also super simple:
 
 ```elixir
 # ./lib/pucks_web/views/error_view.ex

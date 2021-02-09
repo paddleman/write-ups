@@ -10,7 +10,7 @@ Big Thanks to [**Embercasts**]() excellent course on using [Ember with a Phoenix
 
 That said, I have made some changes to packages used, obviously updated to the current versions of both Ember and Phoenix, and implemented a few thing is different ways -- but full credit to previous works.
 
-For this application, I will be using [Elixir Phoenix](https://www.phoenixframework.org/) (v1.5.3) as the backend that will serve up [JSON:API](https://jsonapi.org/) complient json to be used by an frontend developed in [Ember.js](https://emberjs.com/) ---  specifically *[Ember Octane](https://blog.emberjs.com/2019/12/20/octane-is-here.html)* --- this app will use Ember(v3.18).
+For this application, I will be using [Elixir Phoenix](https://www.phoenixframework.org/) (v1.5.3) as the backend that will serve up [JSON:API](https://jsonapi.org/) complient json to be used by an frontend developed in [Ember.js](https://emberjs.com/) ---  specifically *[Ember Octane](https://blog.emberjs.com/2019/12/20/octane-is-here.html)* --- this app will use Ember(v3.23).
 
 This write up assumes you have all the necessary precursors installed as I will not be going over any of that. Suffice to say that you have to have elixir, mix, phoenix etc installed, posgresql (and postgis -- *just because* -- ) as well as npm, yarn, ember-cli etc, etc. I will try to point out where I found that additional programs or dependencies needed to be updated or installed, but realize YMMV.
 
@@ -28,13 +28,13 @@ We have our new ember octane application.  I will use TailwindCss for easier sty
 
 ```ember install ember-auto-import```
 
-To pull in Tailwind, I follow the [step-by-step write up](https://github.com/chrism/emberjs-tailwind-purgecss) provided by *Chris Masters* (Thanks Chris). If you do the same, we will be where we need to be to continue.
+To pull in Tailwind, I follow the [step-by-step write up](https://github.com/chrism/emberjs-tailwind-purgecss) provided by *Chris Masters* (Thanks Chris). Chris provides various levels of adding Tailwind from basic to advanced.  Choose the advanced method near the bottom of the post/readme. If you do the same, we will be where we need to be to continue. 
 
 I want a basic layout for this applation. A navigation bar along the top, some side naviagtion along the left side, a area for filters and searches on the right -- main content in the center and a footer.  
 
 ### insert diagram
 
-Thank god for css-grid.  We will use css-grid to devleop the layout.  I realize that Tailwind has added css-grid, however I find it easier just to write it in normal css for this part of our design.
+Thank god for css-grid.  We will use css-grid to devleop the layout.  I realize that Tailwind has added css-grid support, however I find it easier just to write it in normal css for this part of our design.
 Here is the ```base-grid.css``` file I developed. 
 ```css
 /* ./app/styles/base-grid.css */
@@ -187,7 +187,7 @@ Let's fire up our ember server and see what it looks like. (Note: *ember serve* 
 ```
 This is what it should look like:
 
-**insert picture**
+![alt text](base-layout.png "Our basic layout")
 
 Okay. That's a bit of leg work, but we now have a solid layout upon which to build. For me, as an inexperience (and --- need I stress again --- part-time hack) developer, getting a basic look and styling for the app was a battle. If I felt I was loosing this battle, I would retreat to a point where I was not able to focus on the development I really wanted to learn about. Hopefully this basic layout (tweaked to your hearts content) will provide a basis for others to move on.
 
@@ -327,6 +327,29 @@ Before we go any further, the time has come to create a ```jsconfig.json``` file
 }
 ```
 First, we want to *track* the four properties in the form. We import **tracked** and use it to decorate the properties.
+
+## User Model 
+
+We need a user model. 
+```zsh
+ember g model user
+```
+Pretty typical Ember stuff here. Open the UserModel and we can add our attributes. Octane uses decorartors (@attr) for this
+
+```javascript
+// ./app/models/user.js
+import Model, { attr } from '@ember-data/model';
+
+export default class UserModel extends Model {
+  @attr('string') email;
+  @attr('string') username;
+  @attr('string') password;
+  @attr('string') passwordConfirmation;
+}
+```
+
+Now we turn our attention to the *registration-form* component. First, we want to *track* the four properties in the form. We import **tracked** and use it to decorate the properties.
+
 ```javascript
 // ./app/components/registration-form.js
 import Component from '@glimmer/component';
@@ -402,7 +425,7 @@ registerUser(attrs){
 }
 }
 ```
-Enter some test in the field and submit the form --- examinng the console, you see the pojo of properties that you entered in each field.  That mean our component is wire up properly. But were are not doing anything with the submited values. Lets change that.
+Enter some test in the field and submit the form --- examinng the console, you see the pojo of properties that you entered in each field.  That means our component is wired up properly. But were are not doing anything with the submited values. Lets change that.
 
 First things first --- we need to tell the ember application where the back-end server is located. We do this by setting up an **adapter** --- and then specifying the **host** property. We can use a generator to create the application adapter.
 ```zsh
@@ -467,4 +490,242 @@ Submit a new valid user, and the deprication warning will be gone.
 
 ### Handling the Errors
 
-Our happy path is working, but what happens when errors happen?  Let's handle the errors.
+Our happy path is working, but what happens when errors happen? Our backend will provide us with JSON-API formatted error messages, we have to handle them the *try-catch* block. I must admit --- figuring this out in *Octane* has been challenging. I have come up with a couple of solutions, however I will present the one I think is the way it is suppose to be done.  I am, as always, happy to accept improvements (and/or explainations) to the code.
+
+In order to figure out what was happening, I relied heavily on the dev tools *Inspector*, console.log(), and the debugger to figure out what is available and when, and how to get at the values. It was very informative -- however I will not attempt to recreate the learning path here.
+
+Should the registration fail validation, our server sends the frontend formated errors like so:
+
+![alt text](reg-errors-json.png "Registration errors in json-api format")
+
+The errors are an sent as an object helpfully named *errors*.
+Enter some incorrect data (or click the **Submit** button without any data), and the server will return us such an object.
+
+We can access the object through the errors variable. Let's drop in a debugger to halt the program at at point and see what we have in the *Inspector*.
+
+```javascript
+// ./app/controllers/registration.js 
+import Controller from '@ember/controller';
+import { action } from '@ember/object';
+
+export default class RegistrationController extends Controller {
+
+  @action
+  async registerUser(attrs) {
+    // console.log(attrs);
+    let user = this.store.createRecord('user', attrs);
+
+    try {
+    await user.save();
+    this.transitionToRoute('index');
+    } catch(e) {
+      
+      debugger;
+    }
+  }
+}
+```
+In the Inspector, we will see the following:
+
+![alt text](inspector-errors.png "Errors is an object.")
+
+The variable *errors* is an object, with an **errors** key holding the array of errors sent from the server.
+
+The challenge with using the errors variable, is you cannot (or should I say I cannot) drill down to the *attribute* (like 'email' or 'username). To get to that level, we have to go through the *user* variable.
+
+![alt text](devtools-errors-errors.png "Errors.errors gives us the errors array.")
+
+Although the array of errors is what we are looking for.
+
+Instead, let's look at accessing the errors object thought the *user* variable.
+
+![alt text](dev-tools-user_errors.png "Errors is an object.")
+
+This also contains the error object, filled with arrays of errors for each field. Can we drill down to the *email* field?
+
+![alt text](need-getter-error.png "Need to use a getter.")
+
+Nope...not in the easy ** > user.errors.email** chain at least, but ember provides a very useful error message. We need to use a getter. So let's do that:
+
+![alt text](devtools-user_error-getemail.png "Use a getter.")
+
+And there it is. The array we want.  Let's hive off the first (and only) element (which is an object containing the server error payload) of that array.
+
+![alt text](error-getemail-message.png "Use a getter.")
+
+And that's the message we want displayed. So, let's provide that array of erros to the template, that will then loop through the array, and displaying the *message* property of that element.
+
+To avoid massive confusion in naming, lets call the variable *errs* -- and we want that **@tracked**. In the *try-catch* block, we assign the *errs* variable to *user.errors*
+
+```javascript
+// ./app/controllers/registration.js 
+import Controller from '@ember/controller';
+import { action } from '@ember/object';
+import { tracked } from '@glimmer/tracking';
+
+export default class RegistrationController extends Controller {
+
+  @tracked errs = {}
+
+  @action
+  async registerUser(attrs) {
+    // console.log(attrs);
+    let user = this.store.createRecord('user', attrs);
+
+    try {
+      await user.save();
+      this.transitionToRoute('index');
+    } 
+    catch(errors) {
+      this.errs = user.errors
+    }
+  }
+}
+```
+We have to pass that parameter into our form component.
+
+```hbs
+<!-- ./app/templates/registration.hbs -->
+
+<RegistrationForm 
+  @registerUser={{this.registerUser}} 
+  @errors={{this.errs}}
+/>
+```
+And then in the component, we use the @errors parameter, and loop over it to display the message under the appropriate field.
+```hbs
+<!-- ./app/components/registration-form.hbs -->
+...
+
+<form class="w-full max-w-md mt-4" {{on "submit" this.submitUser}} >
+  <div class="md:flex md:items-center mt-2">
+    <div class="md:w-1/3">
+      <label class="block text-gray-500 font-bold md:text-right mb-1 md:mb-0 pr-4" >
+        Email:
+      </label>
+    </div>
+    <div class="md:w-2/3">
+      <Input class="std-input"  type="text" @value={{this.email}} placeholder="email" />
+    </div>
+  </div>
+
+  <div class="flex justify-center">
+    {{#each @errors.email as |error|}}
+      <div class="w-1/3"></div>
+      <div class="w-2/3 ml-2 text-sm text-red-500">{{error.message}}</div> 
+    {{/each}}
+  </div>
+...
+
+```
+And our error message shows up. Copy and paste to each form field, changes ***@errors.email***  to ***@errors.username***, etc. 
+
+This obviously lends itself to a component. So lets generate one:
+```zsh
+ember g component error-message
+```
+And then we copy the markup to the new component:
+```hbs
+<!-- ./app/components/registration-form.hbs -->
+
+<div class="flex justify-center">
+  {{#each @messages as |error|}}
+    <div class="w-1/3"></div>
+    <div class="w-2/3 ml-2 text-sm text-red-500">{{error.message}}</div> 
+  {{/each}}
+</div>
+``` 
+Okay, just to clearly identify which parameter is envoke where, we called the parameter passed in from the component ***@messages***.
+
+Let's drop our component into our form:
+```hbs
+<!-- ./app/components/registration-form.hbs -->
+...
+
+<form class="w-full max-w-md mt-4" {{on "submit" this.submitUser}} >
+  <div class="md:flex md:items-center mt-2">
+    <div class="md:w-1/3">
+      <label class="block text-gray-500 font-bold md:text-right mb-1 md:mb-0 pr-4" >
+        Email:
+      </label>
+    </div>
+    <div class="md:w-2/3">
+      <Input class="std-input"  type="text" @value={{this.email}} placeholder="email" />
+    </div>
+  </div>
+   <ErrorMessage @messages={{@errors.email}} />
+...
+
+```
+Click submit on a blank form and the error message appear as expected.
+
+![alt text](registration-with-errors.png "Registration form with errors displayed.")
+
+The problem is, unless the page is refreshed, or re-submitted, the error messages stick around. If we cancel out of the registration page and return, I would expect a blank form with not errors. To achieve this, let's look at our **Canel** button. It is a ***LinkTo*** component masquerading as a button. We want to change it to an actual `<button>` and have it erase the ***errs*** object, as well as transition to the *'index'* route.
+
+We want this action to happen in the controller -- since we have access to the *transitionToRoute()* method, which is not available in a component. In addition, following the **DDAU** convention, we do not pass data up (i.e. change the state of a parameter that is passed into the component (in this case  ***@errors*** - from the component). We want this change of state to happen where the parameter originates -- the controller.
+
+So, in the component template, we change the `<LinkTo>` to a `<button>`. We also have the button call the *fireCancel* method when clicked.
+```hbs
+<!-- ./app/components/registration-form.hbs -->
+  ...
+
+  <div class="md:flex md:items-center mt-4">
+    <div class="md:w-1/3"></div>
+    <div class="md:w-2/3">
+
+    <button class="add-btn mr-1" {{on "click" this.fireCancel}} >Cancel </button>
+
+      <button class="add-btn" type="submit" >Submit Registration</button>
+
+    </div>
+  </div>
+</form>
+```
+In the component's backing class, we add that action:
+```javascript
+// ./app/components/registration-form.js 
+  ...
+
+  @action
+  fireCancel() {
+    this.args.cancelForm();    
+  }
+
+  ...
+```
+We add that cancelForm to the args passed into the component:
+```hbs
+<!-- ./app/templates/registration.hbs -->
+
+<RegistrationForm 
+  @registerUser={{this.registerUser}} 
+  @errors={{this.errs}}
+  @cancelForm={{this.cancelForm}}
+/>
+```
+Finally, we add that action to the controller. Reset the *errs* object, and transition to the *'index'* route.
+```javascript
+// ./app/controllers/registration.js 
+
+  ...
+
+  @action
+  cancelForm(){
+    this.errs = {}
+    this.transitionToRoute('index');
+  } 
+  ...
+```
+Okay, generate some errors in the form (submit a blank form) ---> click *Cancel* and you are taken to the index page. Click the ***Register*** button and we have a blank form... just like we wanted.
+
+That was quite the long haul ... and long blog post. But we got there.  In **Part 3**, we again turn our attention to the server side of the application, adding functionality for a registered user to login. We will provide the authenicated user with JWT Token.
+
+
+
+
+
+
+
+
+
